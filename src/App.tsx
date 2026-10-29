@@ -6,6 +6,7 @@ import { Connexion, NouveauMotDePasse } from "./components/Connexion";
 import { MonEntreprise } from "./components/MonEntreprise";
 import { Factures } from "./components/Factures";
 import { Modeles } from "./components/Modeles";
+import { Chargement } from "./components/Chargement";
 import { BoutonTheme } from "./components/Theme";
 import { charger, type Donnees } from "./donnees";
 import { NOM_APP } from "./marque";
@@ -68,7 +69,7 @@ export default function App() {
         </button>
       </div>
     );
-  if (!donnees) return null;
+  if (!donnees) return <Chargement />;
 
   const nbAujourdhui = aRelancer(donnees.factures, donnees.clients, donnees.etapes, donnees.relances).length;
   const onglets: { id: Onglet; titre: string }[] = [
