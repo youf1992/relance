@@ -192,6 +192,18 @@ Deno.serve(async (req) => {
   const entreprise = String(corps.entreprise ?? "").slice(0, 120);
   if (texte.length < 30) return repondre({ erreur: "texte_vide" }, 400);
 
+  // Chemin rapide : si les repères sûrs donnent l'essentiel, pas besoin de l'IA (réponse immédiate)
+  const rapide = regles(texte);
+  if (rapide.client && rapide.numero && rapide.montant > 0) {
+    return repondre({ ...fusionner(verifier(rapide, texte), texte, entreprise), source: "regles" });
+  }
+
+  // Les règles suffisent souvent (factures de logiciels) : réponse immédiate, sans IA
+  const parRegles = regles(texte);
+  if (parRegles.client && parRegles.numero && parRegles.montant > 0 && (parRegles.echeance || parRegles.date)) {
+    return repondre(fusionner(verifier(parRegles, texte), texte, entreprise));
+  }
+
   const consignes =
     "Tu lis une facture et tu en extrais les informations, en JSON. N'invente rien : " +
     "si une information n'est pas dans le texte, mets une chaîne vide (ou 0 pour le montant).\n" +
@@ -206,7 +218,7 @@ Deno.serve(async (req) => {
     const r = await fetch(`${OLLAMA}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(Number(Deno.env.get("OLLAMA_DELAI_MS") ?? 40_000)),
       body: JSON.stringify({
         model: MODELE,
         stream: false,
@@ -214,10 +226,10 @@ Deno.serve(async (req) => {
         format: SCHEMA,
         // num_predict : une réponse JSON fait ~80 mots ; sans limite, un petit modèle
         // peut boucler (espaces sans fin) et occuper le processeur plusieurs minutes.
-        options: { temperature: 0, num_ctx: 4096, num_predict: 256 },
+        options: { temperature: 0, num_ctx: 3072, num_predict: 200 },
         messages: [
           { role: "system", content: consignes },
-          { role: "user", content: texte },
+          { role: "user", content: texte.slice(0, 3500) },
         ],
       }),
     });
