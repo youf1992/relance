@@ -1,0 +1,11 @@
+// Déploiement Cloudflare (Workers + fichiers statiques).
+// Cloudflare lance automatiquement : npm run build, puis npx wrangler deploy.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "relance",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
