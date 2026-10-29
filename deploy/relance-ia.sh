@@ -198,6 +198,64 @@ function verifier(brut: Record<string, unknown>, texte: string) {
   return { ...res, doutes };
 }
 
+// --- Lecture « à l'ancienne » par règles : sert de filet quand l'IA hésite ---------------
+
+const RE_DATE = /(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})/;
+
+function regles(texte: string) {
+  const lignes = texte.split("\n").map((l) => l.trim()).filter(Boolean);
+  const res = { client: "", email: "", numero: "", montant: 0, date: "", echeance: "" };
+  const dateDe = (l: string) => {
+    const m = RE_DATE.exec(l);
+    return m ? dateValide(`${m[1].padStart(2, "0")}/${m[2].padStart(2, "0")}/${m[3]}`) : "";
+  };
+  for (const l of lignes) {
+    const ls = sansAccent(l);
+    if (!res.numero) {
+      const m = /(?:facture|invoice|n[°o]|numero)\s*(?:n[°o]|numero|#)?\s*[:.]?\s*([a-z0-9][a-z0-9\-/_.]{2,})/i.exec(l);
+      if (m && /\d/.test(m[1])) res.numero = m[1];
+    }
+    if (!res.echeance && /(echeance|a regler avant|date limite|payable avant|due)/.test(ls)) res.echeance = dateDe(l);
+    else if (!res.date && /date/.test(ls) && !/echeance|limite/.test(ls)) res.date = dateDe(l);
+    if (/(total\s*ttc|net\s*a\s*payer|montant\s*ttc|total\s*a\s*payer|reste\s*a\s*payer|^montant\b|^total\s*:)/.test(ls)) {
+      const ms = montantsDuTexte(l).filter((n) => n > 0);
+      if (ms.length) res.montant = ms[ms.length - 1];
+    }
+  }
+  // Client : la ligne après « Facturé à », « Client », « Destinataire »
+  const i = lignes.findIndex((l) => /^(facture a|client|destinataire|adresse de facturation)\b/.test(sansAccent(l)));
+  if (i >= 0) {
+    // « Facturé à : X » / « Client Dupont » sur la même ligne, sinon la ligne suivante
+    const apres = lignes[i].replace(/^\s*(factur[ée]e?\s+[àa]|client|destinataire|adresse de facturation)\s*:?\s*/i, "").trim();
+    res.client = apres || lignes[i + 1] || "";
+    const bloc = lignes.slice(i, i + 6).join(" ");
+    res.email = (/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/.exec(bloc)?.[0] ?? "").toLowerCase();
+  }
+  return res;
+}
+
+/**
+ * Les règles sont prioritaires quand elles trouvent quelque chose : elles s'appuient sur
+ * des repères sûrs (« Total TTC », « Échéance », « Facturé à »). L'IA complète le reste.
+ */
+function fusionner(ia: ReturnType<typeof verifier>, texte: string, entreprise: string) {
+  const r = regles(texte);
+  const res = { ...ia, doutes: [...ia.doutes] };
+  for (const k of ["client", "numero", "montant", "date", "echeance", "email"] as const) {
+    if (r[k]) {
+      (res as Record<string, unknown>)[k] = r[k];
+      res.doutes = res.doutes.filter((d) => d !== k);
+    }
+  }
+  // Le client ne peut pas être l'émetteur (erreur fréquente des petits modèles)
+  const mots = sansAccent(entreprise).split(/[^a-z0-9]+/).filter((m) => m.length > 2);
+  if (res.client && mots.some((m) => sansAccent(res.client).includes(m))) {
+    res.client = "";
+    if (!res.doutes.includes("client")) res.doutes.push("client");
+  }
+  return res;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return repondre({ erreur: "methode" }, 405);
@@ -235,29 +293,36 @@ Deno.serve(async (req) => {
     const r = await fetch(`${OLLAMA}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(60_000),
       body: JSON.stringify({
         model: MODELE,
         stream: false,
         think: false,
         format: SCHEMA,
-        options: { temperature: 0, num_ctx: 4096 },
+        // num_predict : une réponse JSON fait ~80 mots ; sans limite, un petit modèle
+        // peut boucler (espaces sans fin) et occuper le processeur plusieurs minutes.
+        options: { temperature: 0, num_ctx: 4096, num_predict: 256 },
         messages: [
           { role: "system", content: consignes },
           { role: "user", content: texte },
         ],
       }),
     });
-    if (!r.ok) {
-      console.error("ollama", r.status, await r.text());
-      return repondre({ erreur: "ia_indisponible" }, 503);
-    }
+    if (!r.ok) throw new Error(`ollama ${r.status} ${await r.text()}`);
     const j = await r.json();
-    const brut = JSON.parse(j?.message?.content ?? "{}");
-    return repondre(verifier(brut, texte));
+    let brut: Record<string, unknown> = {};
+    try {
+      brut = JSON.parse(j?.message?.content ?? "{}");
+    } catch {
+      /* réponse coupée : on se rabat sur les règles */
+    }
+    return repondre(fusionner(verifier(brut, texte), texte, entreprise));
   } catch (e) {
+    // IA trop lente ou indisponible : lecture par règles seulement
     console.error("relance-lire-facture", e);
-    return repondre({ erreur: "ia_indisponible" }, 503);
+    const r = regles(texte);
+    if (!r.numero && !r.montant) return repondre({ erreur: "ia_indisponible" }, 503);
+    return repondre(fusionner(verifier(r, texte), texte, entreprise));
   }
 });
 RELANCE_TS

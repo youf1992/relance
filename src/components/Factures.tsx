@@ -238,7 +238,7 @@ function NouvelleFacture(props: { d: Donnees; recharger: () => Promise<void>; on
     <Carte titre="Nouvelle facture à encaisser" actions={<button className="bouton bouton--texte" onClick={props.onFini}>Fermer</button>}>
       <div className="depot-pdf">
         <label className="bouton bouton--secondaire">
-          {lecture === "en_cours" ? "Lecture de la facture… (jusqu'à 30 s)" : "Remplir depuis le PDF de la facture"}
+          {lecture === "en_cours" ? "Lecture de la facture… (jusqu'à 1 min)" : "Remplir depuis le PDF de la facture"}
           <input
             type="file"
             accept="application/pdf,.pdf"
