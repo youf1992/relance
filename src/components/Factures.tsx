@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { MODELE_CSV, lireCsv, type ResultatLecture } from "../csv";
 import { ajouterClient, ajouterFacture, changerStatut, importer, majFacture, supprimerFacture, type Donnees } from "../donnees";
 import { ajouterJours, aujourdhui, dateFr, ecartJours, emailValide, euros, lireMontant } from "../format";
+import { lireFacture } from "../lecture";
 import type { Facture, Statut } from "../types";
 import { Carte, Champ } from "./ui";
 
@@ -169,7 +170,41 @@ function NouvelleFacture(props: { d: Donnees; recharger: () => Promise<void>; on
   const [echeance, setEcheance] = useState(ajouterJours(aujourdhui(), 30));
   const [erreur, setErreur] = useState("");
   const [enCours, setEnCours] = useState(false);
+  const [lecture, setLecture] = useState<"" | "en_cours" | string>("");
+  const [doutes, setDoutes] = useState<string[]>([]);
   const existant = d.clients.find((c) => c.nom.trim().toLowerCase() === nomClient.trim().toLowerCase());
+
+  async function remplirDepuisPdf(f: File) {
+    setErreur("");
+    setDoutes([]);
+    setLecture("en_cours");
+    try {
+      const r = await lireFacture(f, d.entreprise.nom);
+      // Client déjà connu : on reprend son nom exact
+      const connu = d.clients.find((c) => {
+        const a = c.nom.toLowerCase(), b = r.client.toLowerCase();
+        return b && (a === b || a.includes(b) || b.includes(a));
+      });
+      if (r.client) setNomClient(connu?.nom ?? r.client);
+      if (r.email) setEmail(r.email);
+      if (r.numero) setNumero(r.numero);
+      if (r.montant > 0) setMontant(r.montant.toFixed(2).replace(".", ","));
+      if (r.date) setEmise(r.date);
+      setEcheance(r.echeance || ajouterJours(r.date || emise, 30));
+      const vides = (["client", "numero", "montant"] as const).filter((k) => !r[k]);
+      setDoutes([...r.doutes, ...vides]);
+      setLecture(
+        r.doutes.length || vides.length
+          ? "Facture lue : vérifiez les champs surlignés avant d'ajouter."
+          : "Facture lue : vérifiez puis cliquez sur Ajouter.",
+      );
+    } catch (e) {
+      setLecture("");
+      setErreur(e instanceof Error ? e.message : "Lecture impossible.");
+    }
+  }
+
+  const doute = (k: string) => (doutes.includes(k) ? "champ--doute" : "");
 
   async function valider() {
     setErreur("");
@@ -189,6 +224,8 @@ function NouvelleFacture(props: { d: Donnees; recharger: () => Promise<void>; on
       setMontant("");
       setNomClient("");
       setEmail("");
+      setDoutes([]);
+      setLecture("");
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       setErreur(/duplicate|unique/i.test(msg) ? "Ce numéro de facture existe déjà." : "Enregistrement impossible, réessayez.");
@@ -199,8 +236,26 @@ function NouvelleFacture(props: { d: Donnees; recharger: () => Promise<void>; on
 
   return (
     <Carte titre="Nouvelle facture à encaisser" actions={<button className="bouton bouton--texte" onClick={props.onFini}>Fermer</button>}>
+      <div className="depot-pdf">
+        <label className="bouton bouton--secondaire">
+          {lecture === "en_cours" ? "Lecture de la facture… (jusqu'à 30 s)" : "Remplir depuis le PDF de la facture"}
+          <input
+            type="file"
+            accept="application/pdf,.pdf"
+            hidden
+            disabled={lecture === "en_cours"}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) remplirDepuisPdf(f);
+            }}
+          />
+        </label>
+        <span className="discret petit">Lu par notre IA, sur notre serveur : votre facture ne part chez aucun service extérieur.</span>
+      </div>
+      {lecture && lecture !== "en_cours" && <p className={doutes.length ? "attention" : "info"}>{lecture}</p>}
       <div className="grille">
-        <label className="champ">
+        <label className={`champ ${doute("client")}`}>
           <span className="champ__label">
             Client<span className="requis"> *</span>
           </span>
@@ -214,10 +269,18 @@ function NouvelleFacture(props: { d: Donnees; recharger: () => Promise<void>; on
         {!existant && nomClient.trim() && (
           <Champ label="Email du client" type="email" value={email} onChange={setEmail} aide="Pour lui envoyer les relances" />
         )}
-        <Champ label="N° de facture" requis value={numero} onChange={setNumero} placeholder="F-2026-001" />
-        <Champ label="Montant TTC (€)" requis value={montant} onChange={setMontant} placeholder="1 250,00" />
-        <Champ label="Date de la facture" type="date" value={emise} onChange={(v) => { setEmise(v); if (v) setEcheance(ajouterJours(v, 30)); }} />
-        <Champ label="Échéance" requis type="date" value={echeance} onChange={setEcheance} aide="Par défaut : 30 jours" />
+        <div className={doute("numero")}>
+          <Champ label="N° de facture" requis value={numero} onChange={setNumero} placeholder="F-2026-001" />
+        </div>
+        <div className={doute("montant")}>
+          <Champ label="Montant TTC (€)" requis value={montant} onChange={setMontant} placeholder="1 250,00" />
+        </div>
+        <div className={doute("date")}>
+          <Champ label="Date de la facture" type="date" value={emise} onChange={(v) => { setEmise(v); if (v) setEcheance(ajouterJours(v, 30)); }} />
+        </div>
+        <div className={doute("echeance")}>
+          <Champ label="Échéance" requis type="date" value={echeance} onChange={setEcheance} aide="Par défaut : 30 jours" />
+        </div>
       </div>
       {erreur && <p className="erreur">{erreur}</p>}
       <div className="rangee">

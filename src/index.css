@@ -956,3 +956,7 @@ select:focus {
 .erreur-texte { color: var(--danger); }
 code { font-size: 0.85em; padding: 1px 4px; border-radius: 4px; background: var(--surface-2); }
 details summary { cursor: pointer; margin: 6px 0; }
+.depot-pdf { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
+.depot-pdf .bouton { cursor: pointer; }
+.champ--doute input, .champ--doute .champ input { border-color: #d08a1e; background: #fff7e8; }
+:root[data-theme="dark"] .champ--doute input { background: #33270f; }
