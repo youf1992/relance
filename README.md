@@ -7,7 +7,12 @@ Relance des factures impayées pour les TPE / indépendants (France).
 - **Factures** : saisie rapide ou import CSV (export Excel / outil de facturation), statuts payée / litige / pause.
 - **Clients**, **Mails de relance** (scénario J+3 / J+10 / J+20 modifiable), **Mon entreprise**.
 
-Plus tard : envoi automatique (boîte mail branchée), pré-compta (lecture des factures fournisseurs, export comptable).
+- **Dépenses** (pré-compta) : factures fournisseurs en PDF lues automatiquement (fournisseur, HT, TVA, TTC, catégorie),
+  photos de tickets, justificatifs rangés ; **export du mois** pour le comptable (CSV + justificatifs en ZIP).
+- **Banque** : import du relevé CSV ; sorties sans justificatif = pièces manquantes ; entrées au montant d'une facture
+  à encaisser = « payée » en un clic (les relances s'arrêtent).
+
+Plus tard : envoi automatique (boîte mail branchée).
 
 ## Technique
 

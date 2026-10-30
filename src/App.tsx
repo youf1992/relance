@@ -6,14 +6,17 @@ import { Connexion, NouveauMotDePasse } from "./components/Connexion";
 import { MonEntreprise } from "./components/MonEntreprise";
 import { Factures } from "./components/Factures";
 import { Modeles } from "./components/Modeles";
+import { Banque } from "./components/Banque";
 import { Chargement } from "./components/Chargement";
+import { Depenses, type DepenseDepuisBanque } from "./components/Depenses";
 import { BoutonTheme } from "./components/Theme";
 import { charger, type Donnees } from "./donnees";
 import { NOM_APP } from "./marque";
+import { piecesManquantes } from "./precompta";
 import { aRelancer } from "./relances";
 import { supabase } from "./supabase";
 
-type Onglet = "aujourdhui" | "factures" | "clients" | "modeles" | "entreprise";
+type Onglet = "aujourdhui" | "factures" | "clients" | "depenses" | "banque" | "modeles" | "entreprise";
 
 export default function App() {
   // undefined = on ne sait pas encore ; null = pas connecté
@@ -22,6 +25,7 @@ export default function App() {
   const [donnees, setDonnees] = useState<Donnees | null>(null);
   const [erreur, setErreur] = useState("");
   const [onglet, setOnglet] = useState<Onglet>("aujourdhui");
+  const [depuisBanque, setDepuisBanque] = useState<DepenseDepuisBanque | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -71,11 +75,14 @@ export default function App() {
     );
   if (!donnees) return <Chargement />;
 
+  const nbManquantes = piecesManquantes(donnees.banque).length;
   const nbAujourdhui = aRelancer(donnees.factures, donnees.clients, donnees.etapes, donnees.relances).length;
   const onglets: { id: Onglet; titre: string }[] = [
     { id: "aujourdhui", titre: nbAujourdhui ? `Aujourd'hui (${nbAujourdhui})` : "Aujourd'hui" },
     { id: "factures", titre: "Factures" },
     { id: "clients", titre: "Clients" },
+    { id: "depenses", titre: "Dépenses" },
+    { id: "banque", titre: nbManquantes ? `Banque (${nbManquantes})` : "Banque" },
     { id: "modeles", titre: "Mails de relance" },
     { id: "entreprise", titre: "Mon entreprise" },
   ];
@@ -119,6 +126,28 @@ export default function App() {
         {onglet === "aujourdhui" && <Aujourdhui d={donnees} recharger={recharger} aller={setOnglet} />}
         {onglet === "factures" && <Factures d={donnees} recharger={recharger} />}
         {onglet === "clients" && <Clients d={donnees} recharger={recharger} />}
+        {onglet === "depenses" && (
+          <Depenses
+            d={donnees}
+            uid={uid!}
+            recharger={recharger}
+            depuisBanque={depuisBanque}
+            finDepuisBanque={() => {
+              if (depuisBanque) setOnglet("banque");
+              setDepuisBanque(null);
+            }}
+          />
+        )}
+        {onglet === "banque" && (
+          <Banque
+            d={donnees}
+            recharger={recharger}
+            ajouterJustificatif={(x) => {
+              setDepuisBanque(x);
+              setOnglet("depenses");
+            }}
+          />
+        )}
         {onglet === "modeles" && <Modeles d={donnees} uid={uid!} recharger={recharger} />}
         {onglet === "entreprise" && (
           <MonEntreprise

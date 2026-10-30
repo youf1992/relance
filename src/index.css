@@ -960,3 +960,5 @@ details summary { cursor: pointer; margin: 6px 0; }
 .depot-pdf .bouton { cursor: pointer; }
 .champ--doute input, .champ--doute .champ input { border-color: #d08a1e; background: #fff7e8; }
 :root[data-theme="dark"] .champ--doute input { background: #33270f; }
+.mois { min-width: 9rem; text-align: center; text-transform: capitalize; }
+.select-petit { padding: 0.3rem 0.5rem; font-size: 0.85rem; border: 1px solid var(--trait); border-radius: 8px; background: var(--surface); max-width: 13rem; }

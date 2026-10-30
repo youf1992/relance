@@ -169,6 +169,156 @@ function fusionner(ia: ReturnType<typeof verifier>, texte: string, entreprise: s
   return res;
 }
 
+// =============================================================================
+//  Factures d'ACHAT (pré-compta) : ici le fournisseur est l'ÉMETTEUR de la facture
+// =============================================================================
+
+export const CATEGORIES: Record<string, RegExp> = {
+  carburant: /(carburant|gazole|gasoil|diesel|sp ?95|sp ?98|e10|station[- ]service|totalenergies|esso|shell|avia|intermarch[eé] carburant)/,
+  deplacements: /(p[ée]age|autoroute|vinci autoroutes|sanef|aprr|parking|sncf|train|ouigo|taxi|uber|bolt|billet d.avion|air france|easyjet|ryanair|location de v[ée]hicule)/,
+  repas: /(restaurant|brasserie|boulangerie|traiteur|repas|menu|caf[ée]|deliveroo|uber eats|mcdonald|burger king)/,
+  telecom: /(orange|sfr|bouygues telecom|free mobile|freebox|forfait mobile|t[ée]l[ée]phon|internet|fibre|box)/,
+  logiciels: /(abonnement|licence|logiciel|saas|google workspace|microsoft|office 365|adobe|ovh|o2switch|hostinger|github|canva|notion|dropbox|stripe fees)/,
+  energie: /(edf|engie|electricit[ée]|[ée]lectricit[ée]|gaz de|eau |veolia|suez|kwh)/,
+  loyer: /(loyer|bail|charges locatives|quittance)/,
+  assurance: /(assurance|axa|maaf|macif|allianz|groupama|hiscox|mutuelle|pr[ée]voyance|d[ée]cennale|rc pro)/,
+  honoraires: /(honoraires|expert[- ]comptable|cabinet comptable|avocat|notaire|conseil)/,
+  banque: /(frais bancaires|commission|cotisation carte|tenue de compte|agios)/,
+  publicite: /(publicit[ée]|google ads|meta ads|facebook ads|impression|flyers|cartes de visite|vistaprint)/,
+  entretien: /(r[ée]paration|entretien|maintenance|garage|r[ée]vision|pneu|norauto|feu vert|midas)/,
+  fournitures: /(fournitures|papeterie|bureau vall[ée]e|cartouche|toner|amazon|cdiscount|ldlc|materiel|mat[ée]riel)/,
+  achats: /(marchandise|mati[èe]res? premi[èe]res?|bois|panneaux?|quincaillerie|leroy merlin|castorama|brico|point p|w[uü]rth|matériaux|materiaux)/,
+};
+
+function categorieParMots(texte: string): string {
+  const t = sansAccent(texte);
+  for (const [cat, re] of Object.entries(CATEGORIES)) if (re.test(t)) return cat;
+  return "";
+}
+
+const SCHEMA_ACHAT = {
+  type: "object",
+  properties: {
+    fournisseur: { type: "string" },
+    numero: { type: "string" },
+    date: { type: "string" },
+    ht: { type: "number" },
+    tva: { type: "number" },
+    ttc: { type: "number" },
+    categorie: { type: "string", enum: [...Object.keys(CATEGORIES), "autre"] },
+  },
+  required: ["fournisseur", "numero", "date", "ht", "tva", "ttc", "categorie"],
+};
+
+function reglesAchat(texte: string) {
+  const lignes = texte.split("\n").map((l) => l.trim()).filter(Boolean);
+  const v = regles(texte); // numéro, date, montant TTC
+  const dernier = (re: RegExp) => {
+    let x = 0;
+    for (const l of lignes) {
+      if (re.test(sansAccent(l))) {
+        const ms = montantsDuTexte(l).filter((n) => n > 0);
+        if (ms.length) x = ms[ms.length - 1];
+      }
+    }
+    return x;
+  };
+  const ht = dernier(/(total\s*h\.?t|montant\s*h\.?t|sous[- ]total|base\s*h\.?t|net\s*h\.?t)/);
+  const tva = dernier(/^(total\s*)?t\.?v\.?a\b|montant\s*tva/);
+  let ttc = v.montant;
+  if (!ttc && ht && tva) ttc = Math.round((ht + tva) * 100) / 100;
+  const htFinal = ht || (ttc && tva ? Math.round((ttc - tva) * 100) / 100 : 0);
+  // Ticket sans le mot « date » : la première date écrite
+  let date = v.date;
+  if (!date) {
+    const m = RE_DATE.exec(texte);
+    if (m) date = dateValide(`${m[1].padStart(2, "0")}/${m[2].padStart(2, "0")}/${m[3]}`);
+  }
+  return { numero: v.numero, date, ht: htFinal, tva, ttc };
+}
+
+async function lireAchat(texte: string, entreprise: string) {
+  const r = reglesAchat(texte);
+  const res = {
+    fournisseur: "",
+    numero: r.numero,
+    date: r.date,
+    ht: r.ht,
+    tva: r.tva,
+    ttc: r.ttc,
+    categorie: categorieParMots(texte),
+    doutes: [] as string[],
+    source: "regles",
+  };
+  try {
+    const consignes =
+      "Tu lis une facture ou un ticket REÇU par une entreprise et tu en extrais les informations, en JSON. " +
+      "N'invente rien : si une information manque, chaîne vide ou 0.\n" +
+      (entreprise ? `L'entreprise qui REÇOIT la facture (le client) est « ${entreprise} » : ce n'est jamais le fournisseur.\n` : "") +
+      "fournisseur = l'entreprise qui ÉMET la facture (en haut, avec son SIRET ou son logo).\n" +
+      "ht, tva, ttc = montants totaux en nombres (ex. 1250.5). date au format AAAA-MM-JJ.\n" +
+      "categorie = une des valeurs proposées, ou autre.";
+    const brut = await appelIA(consignes, SCHEMA_ACHAT, texte);
+    const t = sansAccent(texte);
+    const f = String(brut.fournisseur ?? "").trim().slice(0, 120);
+    const motsF = sansAccent(f).split(/[^a-z0-9]+/).filter((m) => m.length > 2);
+    const motsE = sansAccent(entreprise).split(/[^a-z0-9]+/).filter((m) => m.length > 2);
+    if (f && motsF.some((m) => t.includes(m)) && !motsF.some((m) => motsE.includes(m))) res.fournisseur = f;
+    const montantOk = (n: unknown) => {
+      const x = Math.round(Number(n ?? 0) * 100) / 100;
+      return x > 0 && montantsDuTexte(texte).some((m) => Math.abs(m - x) < 0.005) ? x : 0;
+    };
+    if (!res.ttc) res.ttc = montantOk(brut.ttc);
+    if (!res.ht) res.ht = montantOk(brut.ht);
+    if (!res.tva) res.tva = montantOk(brut.tva);
+    if (!res.date) {
+      const d = dateValide(String(brut.date ?? ""));
+      if (d && dateDansTexte(d, texte)) res.date = d;
+    }
+    if (!res.numero) {
+      const n = String(brut.numero ?? "").trim();
+      if (n && t.replace(/\s/g, "").includes(sansAccent(n).replace(/\s/g, ""))) res.numero = n;
+    }
+    if (!res.categorie && typeof brut.categorie === "string" && brut.categorie in CATEGORIES) res.categorie = brut.categorie;
+    res.source = "ia";
+  } catch (e) {
+    console.error("lireAchat", e);
+  }
+  if (!res.fournisseur) {
+    // À défaut : la première ligne qui ressemble à un nom (pas « Facture », pas une date)
+    const l = texte.split("\n").map((x) => x.trim()).find((x) => x.length > 2 && !/factur|ticket|re[çc]u|date|n[°o]|\d{2}\/\d{2}/i.test(x));
+    res.fournisseur = (l ?? "").slice(0, 80);
+    res.doutes.push("fournisseur");
+  }
+  if (!res.categorie) res.categorie = "autre";
+  if (!res.ttc) res.doutes.push("ttc");
+  if (res.ht && res.tva && res.ttc && Math.abs(res.ht + res.tva - res.ttc) > 0.02) res.doutes.push("tva");
+  if (!res.date) res.doutes.push("date");
+  return res;
+}
+
+async function appelIA(consignes: string, schema: unknown, texte: string): Promise<Record<string, unknown>> {
+  const r = await fetch(`${OLLAMA}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(Number(Deno.env.get("OLLAMA_DELAI_MS") ?? 40_000)),
+    body: JSON.stringify({
+      model: MODELE,
+      stream: false,
+      think: false,
+      format: schema,
+      options: { temperature: 0, num_ctx: 3072, num_predict: 200 },
+      messages: [
+        { role: "system", content: consignes },
+        { role: "user", content: texte.slice(0, 3500) },
+      ],
+    }),
+  });
+  if (!r.ok) throw new Error(`ollama ${r.status}`);
+  const j = await r.json();
+  return JSON.parse(j?.message?.content ?? "{}");
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return repondre({ erreur: "methode" }, 405);
@@ -182,7 +332,7 @@ Deno.serve(async (req) => {
   if (!uid) return repondre({ erreur: "non_connecte" }, 401);
   if (tropDAppels(uid)) return repondre({ erreur: "trop_de_demandes" }, 429);
 
-  let corps: { texte?: unknown; entreprise?: unknown };
+  let corps: { texte?: unknown; entreprise?: unknown; type?: unknown };
   try {
     corps = await req.json();
   } catch {
@@ -191,17 +341,12 @@ Deno.serve(async (req) => {
   const texte = String(corps.texte ?? "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim().slice(0, MAX_TEXTE);
   const entreprise = String(corps.entreprise ?? "").slice(0, 120);
   if (texte.length < 30) return repondre({ erreur: "texte_vide" }, 400);
+  if (corps.type === "achat") return repondre(await lireAchat(texte, entreprise));
 
   // Chemin rapide : si les repères sûrs donnent l'essentiel, pas besoin de l'IA (réponse immédiate)
   const rapide = regles(texte);
   if (rapide.client && rapide.numero && rapide.montant > 0) {
     return repondre({ ...fusionner(verifier(rapide, texte), texte, entreprise), source: "regles" });
-  }
-
-  // Les règles suffisent souvent (factures de logiciels) : réponse immédiate, sans IA
-  const parRegles = regles(texte);
-  if (parRegles.client && parRegles.numero && parRegles.montant > 0 && (parRegles.echeance || parRegles.date)) {
-    return repondre(fusionner(verifier(parRegles, texte), texte, entreprise));
   }
 
   const consignes =

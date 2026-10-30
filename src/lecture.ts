@@ -71,3 +71,34 @@ export async function lireFacture(fichier: File, entreprise: string): Promise<Fa
   }
   return data as FactureLue;
 }
+
+export interface DepenseLue {
+  fournisseur: string;
+  numero: string;
+  date: string;
+  ht: number;
+  tva: number;
+  ttc: number;
+  categorie: string;
+  doutes: string[];
+}
+
+/** Facture fournisseur (PDF avec texte) : lecture par règles puis par notre IA, sur notre serveur. */
+export async function lireDepense(fichier: File, entreprise: string): Promise<DepenseLue> {
+  const texte = await texteDuPdf(fichier);
+  if (texte.replace(/\s/g, "").length < 30) throw new Error(MESSAGES.texte_vide);
+  const { data, error } = await supabase.functions.invoke("relance-lire-facture", {
+    body: { texte, entreprise, type: "achat" },
+  });
+  if (error) {
+    let code = "ia_indisponible";
+    try {
+      const corps = await (error as { context?: Response }).context?.json();
+      if (corps?.erreur) code = corps.erreur;
+    } catch {
+      /* réponse illisible */
+    }
+    throw new Error(MESSAGES[code] ?? MESSAGES.ia_indisponible);
+  }
+  return data as DepenseLue;
+}

@@ -45,3 +45,27 @@ export interface Relance {
   canal: string;
   envoyee_le: string;
 }
+
+export interface Depense {
+  id: string;
+  fournisseur: string;
+  numero: string;
+  date: string;
+  ht: number | null;
+  tva: number | null;
+  ttc: number;
+  categorie: string;
+  piece: string | null;
+  notes: string;
+}
+
+export interface LigneBanque {
+  id: string;
+  date: string;
+  libelle: string;
+  montant: number; // négatif = sortie
+  empreinte: string;
+  depense_id: string | null;
+  facture_id: string | null;
+  ignoree: boolean;
+}
