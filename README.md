@@ -16,7 +16,8 @@ Relance des factures impayées pour les TPE / indépendants (France).
   temps standards (sciage, chants, montage, vérification, nettoyage, pose), difficulté, chute, marge, TVA.
   Calcul détaillé (interne) + devis PDF client ; devis accepté → facture en un clic (les relances prennent le relais) ;
   temps réel noté après chantier pour corriger les temps standards.
-  **Lecture de plan** (PDF/photo) par Google Gemini : propose les pièces et accessoires, l'artisan vérifie.
+  **Lecture de plan** (PDF/photo, envoyé en image) par OpenRouter (modèles gratuits possibles) ou Google Gemini :
+  propose les pièces et accessoires, l'artisan vérifie.
   Clé côté serveur, limite de plans par entreprise et par mois (`relance.ia_usage`).
 
 Plus tard : envoi automatique (boîte mail branchée).
@@ -28,7 +29,7 @@ Plus tard : envoi automatique (boîte mail branchée).
   comptes partagés (`auth.users`, inscriptions marquées `app: relance`), anti-robot Turnstile.
 - Mise en place sur le VPS : `sh deploy/relance-installer.sh https://<adresse-de-l-app>` (rejouable).
   Le script est généré par `python3 deploy/construire.py` à partir de `supabase/migrations/`.
-- Lecture des plans : `sh deploy/relance-plans.sh <clé Gemini>` (options `PLANS_PAR_MOIS`, `GEMINI_MODELE`, `--retirer`).
+- Lecture des plans : `sh deploy/relance-plans.sh <clé OpenRouter sk-or-… ou Gemini AIza…>` (`MODELE=…`) (options `PLANS_PAR_MOIS`, `GEMINI_MODELE`, `--retirer`).
 
 ```bash
 npm install

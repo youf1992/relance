@@ -1,6 +1,7 @@
 // Relance : lit un plan d'architecte (PDF ou photo) et propose la liste des pièces à découper.
 //
-// Le plan est envoyé à Google Gemini (modèle qui comprend les images). La clé est sur NOTRE serveur,
+// Le plan est envoyé à une IA qui comprend les images : OpenRouter (modèles gratuits possibles) si
+// OPENROUTER_API_KEY est réglée, sinon Google Gemini. La clé est sur NOTRE serveur,
 // jamais dans le navigateur. Chaque entreprise a une limite de plans par mois (compteur en base),
 // et seules les lectures réussies sont comptées. L'IA propose : l'artisan vérifie avant de chiffrer.
 
@@ -9,6 +10,9 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const CLE = Deno.env.get("GEMINI_API_KEY") ?? "";
 const MODELE = Deno.env.get("GEMINI_MODELE") ?? "gemini-2.5-flash";
 const API = Deno.env.get("GEMINI_URL") ?? "https://generativelanguage.googleapis.com";
+const CLE_OR = Deno.env.get("OPENROUTER_API_KEY") ?? "";
+const MODELE_OR = Deno.env.get("OPENROUTER_MODELE") ?? "openrouter/free";
+const API_OR = Deno.env.get("OPENROUTER_URL") ?? "https://openrouter.ai/api";
 const LIMITE_MOIS = Number(Deno.env.get("PLANS_PAR_MOIS") ?? "200");
 const MAX_OCTETS = 7 * 1024 * 1024;
 const TYPES = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
@@ -108,10 +112,89 @@ function nettoyer(brut: Record<string, unknown>) {
   };
 }
 
+type Reponse = { ok: true; texte: string } | { ok: false; erreur: string };
+
+/** Le JSON de la réponse, même entouré de texte ou de ```json (fréquent avec les modèles gratuits). */
+function lireJson(texte: string): Record<string, unknown> {
+  const t = texte.replace(/<think>[\s\S]*?<\/think>/g, "");
+  try {
+    return JSON.parse(t);
+  } catch {
+    const debut = t.indexOf("{");
+    const fin = t.lastIndexOf("}");
+    if (debut < 0 || fin <= debut) throw new Error("pas de JSON");
+    return JSON.parse(t.slice(debut, fin + 1));
+  }
+}
+
+async function appelGemini(type: string, donnees: string, consigne: string): Promise<Reponse> {
+  const r = await fetch(`${API}/v1beta/models/${MODELE}:generateContent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": CLE },
+    signal: AbortSignal.timeout(110_000),
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: CONSIGNES }] },
+      contents: [{ role: "user", parts: [{ inlineData: { mimeType: type, data: donnees } }, { text: consigne }] }],
+      generationConfig: { temperature: 0, responseMimeType: "application/json", responseSchema: SCHEMA },
+    }),
+  });
+  if (!r.ok) {
+    console.error("gemini", r.status, (await r.text()).slice(0, 500));
+    return { ok: false, erreur: r.status === 429 ? "ia_occupee" : "ia_indisponible" };
+  }
+  const j = await r.json();
+  return { ok: true, texte: j?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? "").join("") ?? "" };
+}
+
+// Modèle de réponse décrit en clair : tous les modèles gratuits ne savent pas suivre un schéma imposé.
+const FORMAT_JSON = `Réponds UNIQUEMENT avec un objet JSON, sans texte autour, de la forme :
+{"caissons": 2, "remarques": "…", "pieces": [{"nom": "Côté", "longueur": 2400, "largeur": 580, "epaisseur": 19,
+"quantite": 2, "chants_longueur": 1, "chants_largeur": 0}], "accessoires": [{"nom": "Charnière", "quantite": 4}]}
+Dimensions en millimètres, nombres sans unité.`;
+
+async function appelOpenRouter(type: string, donnees: string, consigne: string): Promise<Reponse> {
+  if (type === "application/pdf") return { ok: false, erreur: "format" }; // le navigateur envoie une image
+  const r = await fetch(`${API_OR}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${CLE_OR}`,
+      "X-Title": "Relance",
+    },
+    signal: AbortSignal.timeout(110_000),
+    body: JSON.stringify({
+      model: MODELE_OR,
+      temperature: 0,
+      messages: [
+        { role: "system", content: `${CONSIGNES}\n\n${FORMAT_JSON}` },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: consigne },
+            { type: "image_url", image_url: { url: `data:${type};base64,${donnees}` } },
+          ],
+        },
+      ],
+    }),
+  });
+  if (!r.ok) {
+    console.error("openrouter", r.status, (await r.text()).slice(0, 500));
+    // 429 : limite des modèles gratuits (50 par jour sans crédit) ou modèle surchargé
+    return { ok: false, erreur: r.status === 429 ? "ia_occupee" : r.status === 402 ? "ia_credit" : "ia_indisponible" };
+  }
+  const j = await r.json();
+  const texte = j?.choices?.[0]?.message?.content;
+  if (!texte) {
+    console.error("openrouter réponse vide", JSON.stringify(j).slice(0, 300));
+    return { ok: false, erreur: "ia_indisponible" };
+  }
+  return { ok: true, texte: typeof texte === "string" ? texte : texte.map((p: { text?: string }) => p.text ?? "").join("") };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return repondre({ erreur: "methode" }, 405);
-  if (!CLE) return repondre({ erreur: "ia_non_configuree" }, 503);
+  if (!CLE && !CLE_OR) return repondre({ erreur: "ia_non_configuree" }, 503);
 
   const jeton = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
@@ -144,32 +227,13 @@ Deno.serve(async (req) => {
 
   const rendre = () => admin.rpc("rendre_plan", { p_entreprise: uid }).then(() => {});
   try {
-    const r = await fetch(`${API}/v1beta/models/${MODELE}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": CLE },
-      signal: AbortSignal.timeout(110_000),
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: CONSIGNES }] },
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { inlineData: { mimeType: type, data: donnees } },
-              { text: precisions ? `Précisions de l'artisan : ${precisions}` : "Établis la liste de débit de ce plan." },
-            ],
-          },
-        ],
-        generationConfig: { temperature: 0, responseMimeType: "application/json", responseSchema: SCHEMA },
-      }),
-    });
+    const consigne = precisions ? `Précisions de l'artisan : ${precisions}` : "Établis la liste de débit de ce plan.";
+    const r = CLE_OR ? await appelOpenRouter(type, donnees, consigne) : await appelGemini(type, donnees, consigne);
     if (!r.ok) {
       await rendre();
-      console.error("gemini", r.status, (await r.text()).slice(0, 500));
-      return repondre({ erreur: r.status === 429 ? "ia_occupee" : "ia_indisponible" }, 503);
+      return repondre({ erreur: r.erreur }, 503);
     }
-    const j = await r.json();
-    const texte = j?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? "").join("") ?? "";
-    const resultat = nettoyer(JSON.parse(texte || "{}"));
+    const resultat = nettoyer(lireJson(r.texte));
     return repondre({ ...resultat, utilises: total, limite: LIMITE_MOIS });
   } catch (e) {
     await rendre();

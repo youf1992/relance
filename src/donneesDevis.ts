@@ -180,7 +180,8 @@ export interface PlanLu {
 const MESSAGES: Record<string, string> = {
   ia_non_configuree: "La lecture des plans n'est pas encore activée sur le serveur.",
   limite_mois: "Limite de plans lus ce mois-ci atteinte : remplissez les pièces à la main.",
-  ia_occupee: "L'IA est très demandée en ce moment : réessayez dans une minute.",
+  ia_occupee: "L'IA est très demandée ou la limite gratuite du jour est atteinte : réessayez plus tard ou remplissez à la main.",
+  ia_credit: "Plus de crédit sur le compte IA : remplissez les pièces à la main.",
   ia_indisponible: "La lecture du plan est indisponible pour le moment : remplissez les pièces à la main.",
   trop_gros: "Fichier trop lourd (7 Mo maximum) : envoyez une photo ou un PDF plus léger.",
   format: "Format non reconnu : envoyez un PDF, une photo JPG ou PNG.",
@@ -193,27 +194,52 @@ const enBase64 = (octets: Uint8Array) => {
   return btoa(s);
 };
 
-/** Photo : réduite à 3000 px de côté maximum (assez pour lire les cotes, beaucoup plus léger). */
+const MAX_PX = 3000; // assez pour lire les cotes, et bien plus léger que l'original
+
+async function enJpeg(toile: HTMLCanvasElement): Promise<{ type: string; donnees: string }> {
+  const blob = await new Promise<Blob>((ok, ko) => toile.toBlob((b) => (b ? ok(b) : ko(new Error("image"))), "image/jpeg", 0.88));
+  return { type: "image/jpeg", donnees: enBase64(new Uint8Array(await blob.arrayBuffer())) };
+}
+
+/** Photo : réduite à 3000 px de côté maximum. */
 async function photoReduite(f: File): Promise<{ type: string; donnees: string }> {
   const img = await createImageBitmap(f);
-  const echelle = Math.min(1, 3000 / Math.max(img.width, img.height));
+  const echelle = Math.min(1, MAX_PX / Math.max(img.width, img.height));
   const toile = document.createElement("canvas");
   toile.width = Math.round(img.width * echelle);
   toile.height = Math.round(img.height * echelle);
   toile.getContext("2d")!.drawImage(img, 0, 0, toile.width, toile.height);
   img.close();
-  const blob = await new Promise<Blob>((ok, ko) => toile.toBlob((b) => (b ? ok(b) : ko(new Error("image"))), "image/jpeg", 0.88));
-  return { type: "image/jpeg", donnees: enBase64(new Uint8Array(await blob.arrayBuffer())) };
+  return enJpeg(toile);
+}
+
+/** PDF : la première page est dessinée en image (toutes les IA savent lire une image, pas toutes un PDF). */
+async function pdfEnImage(f: File): Promise<{ type: string; donnees: string }> {
+  const pdfjs = await import("pdfjs-dist");
+  pdfjs.GlobalWorkerOptions.workerSrc = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default;
+  const chargement = pdfjs.getDocument({ data: new Uint8Array(await f.arrayBuffer()) });
+  try {
+    const page = await (await chargement.promise).getPage(1);
+    const base = page.getViewport({ scale: 1 });
+    const vue = page.getViewport({ scale: Math.min(8, MAX_PX / Math.max(base.width, base.height)) });
+    const toile = document.createElement("canvas");
+    toile.width = Math.round(vue.width);
+    toile.height = Math.round(vue.height);
+    const ctx = toile.getContext("2d")!;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, toile.width, toile.height);
+    await page.render({ canvas: toile, canvasContext: ctx, viewport: vue }).promise;
+    return enJpeg(toile);
+  } finally {
+    await chargement.destroy();
+  }
 }
 
 export async function lirePlan(f: File, precisions: string): Promise<PlanLu> {
   const estPdf = f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
-  if (estPdf && f.size > 7 * 1024 * 1024) throw new Error(MESSAGES.trop_gros);
-  const corps = estPdf
-    ? { type: "application/pdf", donnees: enBase64(new Uint8Array(await f.arrayBuffer())) }
-    : await photoReduite(f).catch(() => {
-        throw new Error(MESSAGES.format);
-      });
+  const corps = await (estPdf ? pdfEnImage(f) : photoReduite(f)).catch(() => {
+    throw new Error(MESSAGES.format);
+  });
   const { data, error } = await supabase.functions.invoke("relance-lire-plan", { body: { ...corps, precisions } });
   if (error) {
     let code = "ia_indisponible";
