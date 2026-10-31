@@ -12,6 +12,8 @@ const MODELE = Deno.env.get("GEMINI_MODELE") ?? "gemini-2.5-flash";
 const API = Deno.env.get("GEMINI_URL") ?? "https://generativelanguage.googleapis.com";
 const CLE_OR = Deno.env.get("OPENROUTER_API_KEY") ?? "";
 const MODELE_OR = Deno.env.get("OPENROUTER_MODELE") ?? "openrouter/free";
+// Facultatif : modèle (payant, fiable) utilisé au dernier essai si les gratuits ont échoué
+const SECOURS_OR = Deno.env.get("OPENROUTER_SECOURS") ?? "";
 const API_OR = Deno.env.get("OPENROUTER_URL") ?? "https://openrouter.ai/api";
 const LIMITE_MOIS = Number(Deno.env.get("PLANS_PAR_MOIS") ?? "200");
 const MAX_OCTETS = 7 * 1024 * 1024;
@@ -172,7 +174,7 @@ const FORMAT_JSON = `Réponds UNIQUEMENT avec un objet JSON, sans texte autour, 
 "quantite": 2, "chants_longueur": 1, "chants_largeur": 0}], "accessoires": [{"nom": "Charnière", "quantite": 4}]}
 Dimensions en millimètres, nombres sans unité.`;
 
-async function appelOpenRouter(type: string, donnees: string, consigne: string, delai: number): Promise<Reponse> {
+async function appelOpenRouter(type: string, donnees: string, consigne: string, delai: number, modele = MODELE_OR): Promise<Reponse> {
   if (type === "application/pdf") return { ok: false, erreur: "format" }; // le navigateur envoie une image
   const r = await fetch(`${API_OR}/v1/chat/completions`, {
     method: "POST",
@@ -183,9 +185,12 @@ async function appelOpenRouter(type: string, donnees: string, consigne: string, 
     },
     signal: AbortSignal.timeout(delai),
     body: JSON.stringify({
-      model: MODELE_OR,
+      model: modele,
       temperature: 0,
-      max_tokens: 6000,
+      // Les modèles « qui réfléchissent » comptent leur réflexion dans max_tokens : sans limite, ils peuvent
+      // tout dépenser à réfléchir et renvoyer une réponse vide. On garde peu de réflexion et beaucoup de place.
+      max_tokens: 16000,
+      reasoning: { effort: "low", exclude: true },
       messages: [
         { role: "system", content: `${CONSIGNES}\n\n${FORMAT_JSON}` },
         {
@@ -206,9 +211,10 @@ async function appelOpenRouter(type: string, donnees: string, consigne: string, 
   const j = await r.json();
   const texte = j?.choices?.[0]?.message?.content;
   if (!texte) {
-    console.error("openrouter réponse vide", JSON.stringify(j).slice(0, 300));
+    console.error(`openrouter réponse vide (${j?.model}, fin : ${j?.choices?.[0]?.finish_reason})`);
     return { ok: false, erreur: "ia_indisponible" };
   }
+  console.log(`openrouter ok (${j?.model})`);
   return { ok: true, texte: typeof texte === "string" ? texte : texte.map((p: { text?: string }) => p.text ?? "").join("") };
 }
 
@@ -257,8 +263,9 @@ Deno.serve(async (req) => {
       const reste = 140_000 - (Date.now() - depart); // le serveur coupe vers 150 s
       if (reste < 20_000) break;
       try {
+        const secours = CLE_OR && SECOURS_OR && i === essais;
         const r = CLE_OR
-          ? await appelOpenRouter(type, donnees, consigne, Math.min(70_000, reste))
+          ? await appelOpenRouter(type, donnees, consigne, Math.min(secours ? reste : 60_000, reste), secours ? SECOURS_OR : MODELE_OR)
           : await appelGemini(type, donnees, consigne);
         if (!r.ok) {
           erreur = r.erreur;

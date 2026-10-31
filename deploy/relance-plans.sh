@@ -13,6 +13,8 @@
 # Usage, sur le VPS :  sh relance-plans.sh LA_CLE   (OpenRouter ou Gemini)
 # Options : PLANS_PAR_MOIS=300 sh relance-plans.sh LA_CLE   (changer la limite)
 #           MODELE=google/gemini-2.5-flash sh relance-plans.sh sk-or-...   (modèle payant précis via OpenRouter)
+#           SECOURS=google/gemini-2.5-flash sh relance-plans.sh sk-or-...   (gratuit d'abord, payant seulement si
+#                                                                          les gratuits échouent : ≈1 centime)
 #           MODELE=gemini-2.5-flash-lite sh relance-plans.sh AIza...         (modèle Gemini)
 #           sh relance-plans.sh --retirer                    (désactive la lecture des plans)
 # Clés : https://openrouter.ai/settings/keys  ou  https://aistudio.google.com/apikey
@@ -29,7 +31,7 @@ FICHIER=docker-compose.podo-plans.yml
 if [ "${1:-}" = "--retirer" ]; then
   log "Retrait de la lecture des plans"
   sed -i "s|:$FICHIER||" .env
-  sed -i '/^GEMINI_API_KEY=/d;/^GEMINI_MODELE=/d;/^OPENROUTER_API_KEY=/d;/^OPENROUTER_MODELE=/d;/^PLANS_PAR_MOIS=/d' .env
+  sed -i '/^GEMINI_API_KEY=/d;/^GEMINI_MODELE=/d;/^OPENROUTER_API_KEY=/d;/^OPENROUTER_MODELE=/d;/^OPENROUTER_SECOURS=/d;/^PLANS_PAR_MOIS=/d' .env
   rm -f "$FICHIER"
   rm -rf volumes/functions/relance-lire-plan
   docker compose up -d --no-deps --force-recreate functions >/dev/null 2>&1
@@ -49,7 +51,9 @@ case "$CLE" in
     echo "  Clé valide. Modèle : $MODELE"
     rm -f /tmp/relance-cle.json
     LIGNES="OPENROUTER_API_KEY=$CLE
-OPENROUTER_MODELE=$MODELE"
+OPENROUTER_MODELE=$MODELE
+OPENROUTER_SECOURS=${SECOURS:-}"
+    [ -n "${SECOURS:-}" ] && echo "  Secours si les gratuits échouent : $SECOURS"
     ;;
   AIza*)
     FOURNISSEUR=Gemini
@@ -72,11 +76,11 @@ esac
 log "Réglages"
 STAMP=$(date +%Y%m%d-%H%M%S)
 cp .env ".env.avant-plans.$STAMP"
-sed -i '/^GEMINI_API_KEY=/d;/^GEMINI_MODELE=/d;/^OPENROUTER_API_KEY=/d;/^OPENROUTER_MODELE=/d;/^PLANS_PAR_MOIS=/d' .env
+sed -i '/^GEMINI_API_KEY=/d;/^GEMINI_MODELE=/d;/^OPENROUTER_API_KEY=/d;/^OPENROUTER_MODELE=/d;/^OPENROUTER_SECOURS=/d;/^PLANS_PAR_MOIS=/d' .env
 printf '%s\nPLANS_PAR_MOIS=%s\n' "$LIGNES" "$LIMITE" >> .env
 # Variables vides pour l'autre fournisseur : une seule IA active à la fois
 grep -q '^GEMINI_API_KEY=' .env || printf 'GEMINI_API_KEY=\nGEMINI_MODELE=gemini-2.5-flash\n' >> .env
-grep -q '^OPENROUTER_API_KEY=' .env || printf 'OPENROUTER_API_KEY=\nOPENROUTER_MODELE=openrouter/free\n' >> .env
+grep -q '^OPENROUTER_API_KEY=' .env || printf 'OPENROUTER_API_KEY=\nOPENROUTER_MODELE=openrouter/free\nOPENROUTER_SECOURS=\n' >> .env
 cat > "$FICHIER" <<'YML'
 # Lecture des plans (app Relance, module Devis) : la clé reste dans .env, côté serveur.
 services:
@@ -86,6 +90,7 @@ services:
       GEMINI_MODELE: ${GEMINI_MODELE}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       OPENROUTER_MODELE: ${OPENROUTER_MODELE}
+      OPENROUTER_SECOURS: ${OPENROUTER_SECOURS}
       PLANS_PAR_MOIS: ${PLANS_PAR_MOIS}
 YML
 if grep -q '^COMPOSE_FILE=' .env; then
@@ -113,6 +118,8 @@ const MODELE = Deno.env.get("GEMINI_MODELE") ?? "gemini-2.5-flash";
 const API = Deno.env.get("GEMINI_URL") ?? "https://generativelanguage.googleapis.com";
 const CLE_OR = Deno.env.get("OPENROUTER_API_KEY") ?? "";
 const MODELE_OR = Deno.env.get("OPENROUTER_MODELE") ?? "openrouter/free";
+// Facultatif : modèle (payant, fiable) utilisé au dernier essai si les gratuits ont échoué
+const SECOURS_OR = Deno.env.get("OPENROUTER_SECOURS") ?? "";
 const API_OR = Deno.env.get("OPENROUTER_URL") ?? "https://openrouter.ai/api";
 const LIMITE_MOIS = Number(Deno.env.get("PLANS_PAR_MOIS") ?? "200");
 const MAX_OCTETS = 7 * 1024 * 1024;
@@ -273,7 +280,7 @@ const FORMAT_JSON = `Réponds UNIQUEMENT avec un objet JSON, sans texte autour, 
 "quantite": 2, "chants_longueur": 1, "chants_largeur": 0}], "accessoires": [{"nom": "Charnière", "quantite": 4}]}
 Dimensions en millimètres, nombres sans unité.`;
 
-async function appelOpenRouter(type: string, donnees: string, consigne: string, delai: number): Promise<Reponse> {
+async function appelOpenRouter(type: string, donnees: string, consigne: string, delai: number, modele = MODELE_OR): Promise<Reponse> {
   if (type === "application/pdf") return { ok: false, erreur: "format" }; // le navigateur envoie une image
   const r = await fetch(`${API_OR}/v1/chat/completions`, {
     method: "POST",
@@ -284,9 +291,12 @@ async function appelOpenRouter(type: string, donnees: string, consigne: string, 
     },
     signal: AbortSignal.timeout(delai),
     body: JSON.stringify({
-      model: MODELE_OR,
+      model: modele,
       temperature: 0,
-      max_tokens: 6000,
+      // Les modèles « qui réfléchissent » comptent leur réflexion dans max_tokens : sans limite, ils peuvent
+      // tout dépenser à réfléchir et renvoyer une réponse vide. On garde peu de réflexion et beaucoup de place.
+      max_tokens: 16000,
+      reasoning: { effort: "low", exclude: true },
       messages: [
         { role: "system", content: `${CONSIGNES}\n\n${FORMAT_JSON}` },
         {
@@ -307,9 +317,10 @@ async function appelOpenRouter(type: string, donnees: string, consigne: string, 
   const j = await r.json();
   const texte = j?.choices?.[0]?.message?.content;
   if (!texte) {
-    console.error("openrouter réponse vide", JSON.stringify(j).slice(0, 300));
+    console.error(`openrouter réponse vide (${j?.model}, fin : ${j?.choices?.[0]?.finish_reason})`);
     return { ok: false, erreur: "ia_indisponible" };
   }
+  console.log(`openrouter ok (${j?.model})`);
   return { ok: true, texte: typeof texte === "string" ? texte : texte.map((p: { text?: string }) => p.text ?? "").join("") };
 }
 
@@ -358,8 +369,9 @@ Deno.serve(async (req) => {
       const reste = 140_000 - (Date.now() - depart); // le serveur coupe vers 150 s
       if (reste < 20_000) break;
       try {
+        const secours = CLE_OR && SECOURS_OR && i === essais;
         const r = CLE_OR
-          ? await appelOpenRouter(type, donnees, consigne, Math.min(70_000, reste))
+          ? await appelOpenRouter(type, donnees, consigne, Math.min(secours ? reste : 60_000, reste), secours ? SECOURS_OR : MODELE_OR)
           : await appelGemini(type, donnees, consigne);
         if (!r.ok) {
           erreur = r.erreur;

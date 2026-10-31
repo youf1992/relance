@@ -13,6 +13,8 @@
 # Usage, sur le VPS :  sh relance-plans.sh LA_CLE   (OpenRouter ou Gemini)
 # Options : PLANS_PAR_MOIS=300 sh relance-plans.sh LA_CLE   (changer la limite)
 #           MODELE=google/gemini-2.5-flash sh relance-plans.sh sk-or-...   (modèle payant précis via OpenRouter)
+#           SECOURS=google/gemini-2.5-flash sh relance-plans.sh sk-or-...   (gratuit d'abord, payant seulement si
+#                                                                          les gratuits échouent : ≈1 centime)
 #           MODELE=gemini-2.5-flash-lite sh relance-plans.sh AIza...         (modèle Gemini)
 #           sh relance-plans.sh --retirer                    (désactive la lecture des plans)
 # Clés : https://openrouter.ai/settings/keys  ou  https://aistudio.google.com/apikey
@@ -29,7 +31,7 @@ FICHIER=docker-compose.podo-plans.yml
 if [ "${1:-}" = "--retirer" ]; then
   log "Retrait de la lecture des plans"
   sed -i "s|:$FICHIER||" .env
-  sed -i '/^GEMINI_API_KEY=/d;/^GEMINI_MODELE=/d;/^OPENROUTER_API_KEY=/d;/^OPENROUTER_MODELE=/d;/^PLANS_PAR_MOIS=/d' .env
+  sed -i '/^GEMINI_API_KEY=/d;/^GEMINI_MODELE=/d;/^OPENROUTER_API_KEY=/d;/^OPENROUTER_MODELE=/d;/^OPENROUTER_SECOURS=/d;/^PLANS_PAR_MOIS=/d' .env
   rm -f "$FICHIER"
   rm -rf volumes/functions/relance-lire-plan
   docker compose up -d --no-deps --force-recreate functions >/dev/null 2>&1
@@ -49,7 +51,9 @@ case "$CLE" in
     echo "  Clé valide. Modèle : $MODELE"
     rm -f /tmp/relance-cle.json
     LIGNES="OPENROUTER_API_KEY=$CLE
-OPENROUTER_MODELE=$MODELE"
+OPENROUTER_MODELE=$MODELE
+OPENROUTER_SECOURS=${SECOURS:-}"
+    [ -n "${SECOURS:-}" ] && echo "  Secours si les gratuits échouent : $SECOURS"
     ;;
   AIza*)
     FOURNISSEUR=Gemini
@@ -72,11 +76,11 @@ esac
 log "Réglages"
 STAMP=$(date +%Y%m%d-%H%M%S)
 cp .env ".env.avant-plans.$STAMP"
-sed -i '/^GEMINI_API_KEY=/d;/^GEMINI_MODELE=/d;/^OPENROUTER_API_KEY=/d;/^OPENROUTER_MODELE=/d;/^PLANS_PAR_MOIS=/d' .env
+sed -i '/^GEMINI_API_KEY=/d;/^GEMINI_MODELE=/d;/^OPENROUTER_API_KEY=/d;/^OPENROUTER_MODELE=/d;/^OPENROUTER_SECOURS=/d;/^PLANS_PAR_MOIS=/d' .env
 printf '%s\nPLANS_PAR_MOIS=%s\n' "$LIGNES" "$LIMITE" >> .env
 # Variables vides pour l'autre fournisseur : une seule IA active à la fois
 grep -q '^GEMINI_API_KEY=' .env || printf 'GEMINI_API_KEY=\nGEMINI_MODELE=gemini-2.5-flash\n' >> .env
-grep -q '^OPENROUTER_API_KEY=' .env || printf 'OPENROUTER_API_KEY=\nOPENROUTER_MODELE=openrouter/free\n' >> .env
+grep -q '^OPENROUTER_API_KEY=' .env || printf 'OPENROUTER_API_KEY=\nOPENROUTER_MODELE=openrouter/free\nOPENROUTER_SECOURS=\n' >> .env
 cat > "$FICHIER" <<'YML'
 # Lecture des plans (app Relance, module Devis) : la clé reste dans .env, côté serveur.
 services:
@@ -86,6 +90,7 @@ services:
       GEMINI_MODELE: ${GEMINI_MODELE}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       OPENROUTER_MODELE: ${OPENROUTER_MODELE}
+      OPENROUTER_SECOURS: ${OPENROUTER_SECOURS}
       PLANS_PAR_MOIS: ${PLANS_PAR_MOIS}
 YML
 if grep -q '^COMPOSE_FILE=' .env; then
