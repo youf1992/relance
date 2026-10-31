@@ -12,10 +12,10 @@
 #
 # Usage, sur le VPS :  sh relance-plans.sh LA_CLE   (OpenRouter ou Gemini)
 # Options : PLANS_PAR_MOIS=300 sh relance-plans.sh LA_CLE   (changer la limite)
-#           MODELE=google/gemini-2.5-flash sh relance-plans.sh sk-or-...   (modèle payant précis via OpenRouter)
-#           SECOURS=google/gemini-2.5-flash sh relance-plans.sh sk-or-...   (gratuit d'abord, payant seulement si
+#           MODELE=google/gemini-3.8-flash sh relance-plans.sh sk-or-...   (modèle payant précis via OpenRouter)
+#           SECOURS=google/gemini-3.8-flash sh relance-plans.sh sk-or-...   (gratuit d'abord, payant seulement si
 #                                                                          les gratuits échouent : ≈1 centime)
-#           MODELE=gemini-2.5-flash-lite sh relance-plans.sh AIza...         (modèle Gemini)
+#           MODELE=gemini-3.5-flash-lite sh relance-plans.sh AQ....          (plus de quota gratuit, moins précis)
 #           sh relance-plans.sh --retirer                    (désactive la lecture des plans)
 # Clés : https://openrouter.ai/settings/keys  ou  https://aistudio.google.com/apikey
 # =============================================================================
@@ -57,15 +57,19 @@ OPENROUTER_SECOURS=${SECOURS:-}"
     ;;
   AIza*|AQ.*)
     FOURNISSEUR=Gemini
-    MODELE="${MODELE:-${GEMINI_MODELE:-gemini-2.5-flash}}"
-    log "Test de la clé Gemini"
-    CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "x-goog-api-key: $CLE" \
-      "https://generativelanguage.googleapis.com/v1beta/models/$MODELE" || true)
+    MODELE="${MODELE:-${GEMINI_MODELE:-gemini-3.8-flash}}"
+    log "Test de la clé Gemini (vraie question au modèle $MODELE)"
+    REPONSE=$(curl -s -w '\n%{http_code}' -H "x-goog-api-key: $CLE" -H "Content-Type: application/json" \
+      -d '{"contents":[{"parts":[{"text":"Réponds seulement : OK"}]}]}' \
+      "https://generativelanguage.googleapis.com/v1beta/models/$MODELE:generateContent" || true)
+    CODE=$(printf '%s' "$REPONSE" | tail -n1)
+    MESSAGE=$(printf '%s' "$REPONSE" | grep -o '"message": *"[^"]*"' | head -1)
     case "$CODE" in
-      200) echo "  Clé valide, modèle $MODELE disponible." ;;
-      400|401|403) die "Clé refusée par Google (HTTP $CODE). Recopie-la en entier depuis https://aistudio.google.com/apikey (entre guillemets)" ;;
-      404) die "Modèle $MODELE introuvable. Essaie MODELE=gemini-2.5-flash" ;;
-      *) die "Google ne répond pas (HTTP $CODE). Vérifie la connexion du VPS." ;;
+      200) echo "  Clé valide, le modèle $MODELE répond." ;;
+      400|401|403) die "Clé refusée par Google (HTTP $CODE) $MESSAGE. Recopie-la en entier depuis https://aistudio.google.com/apikey (entre guillemets)" ;;
+      404) die "Modèle $MODELE indisponible : $MESSAGE  → relance avec MODELE=<modèle conseillé> sh $0 \"LA_CLE\"" ;;
+      429) die "Quota gratuit du modèle $MODELE épuisé pour aujourd'hui $MESSAGE. Essaie MODELE=gemini-3.5-flash-lite, ou réessaie demain." ;;
+      *) die "Google ne répond pas (HTTP $CODE) $MESSAGE" ;;
     esac
     LIGNES="GEMINI_API_KEY=$CLE
 GEMINI_MODELE=$MODELE"
@@ -79,7 +83,7 @@ cp .env ".env.avant-plans.$STAMP"
 sed -i '/^GEMINI_API_KEY=/d;/^GEMINI_MODELE=/d;/^OPENROUTER_API_KEY=/d;/^OPENROUTER_MODELE=/d;/^OPENROUTER_SECOURS=/d;/^PLANS_PAR_MOIS=/d' .env
 printf '%s\nPLANS_PAR_MOIS=%s\n' "$LIGNES" "$LIMITE" >> .env
 # Variables vides pour l'autre fournisseur : une seule IA active à la fois
-grep -q '^GEMINI_API_KEY=' .env || printf 'GEMINI_API_KEY=\nGEMINI_MODELE=gemini-2.5-flash\n' >> .env
+grep -q '^GEMINI_API_KEY=' .env || printf 'GEMINI_API_KEY=\nGEMINI_MODELE=gemini-3.8-flash\n' >> .env
 grep -q '^OPENROUTER_API_KEY=' .env || printf 'OPENROUTER_API_KEY=\nOPENROUTER_MODELE=openrouter/free\nOPENROUTER_SECOURS=\n' >> .env
 cat > "$FICHIER" <<'YML'
 # Lecture des plans (app Relance, module Devis) : la clé reste dans .env, côté serveur.

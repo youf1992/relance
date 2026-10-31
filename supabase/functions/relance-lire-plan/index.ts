@@ -8,7 +8,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const CLE = Deno.env.get("GEMINI_API_KEY") ?? "";
-const MODELE = Deno.env.get("GEMINI_MODELE") ?? "gemini-2.5-flash";
+const MODELE = Deno.env.get("GEMINI_MODELE") ?? "gemini-3.8-flash";
 const API = Deno.env.get("GEMINI_URL") ?? "https://generativelanguage.googleapis.com";
 const CLE_OR = Deno.env.get("OPENROUTER_API_KEY") ?? "";
 const MODELE_OR = Deno.env.get("OPENROUTER_MODELE") ?? "openrouter/free";
@@ -157,7 +157,7 @@ async function appelGemini(type: string, donnees: string, consigne: string): Pro
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: CONSIGNES }] },
       contents: [{ role: "user", parts: [{ inlineData: { mimeType: type, data: donnees } }, { text: consigne }] }],
-      generationConfig: { temperature: 0, responseMimeType: "application/json", responseSchema: SCHEMA },
+      generationConfig: { responseMimeType: "application/json", responseSchema: SCHEMA },
     }),
   });
   if (!r.ok) {
