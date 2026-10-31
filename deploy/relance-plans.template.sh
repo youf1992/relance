@@ -69,6 +69,8 @@ OPENROUTER_SECOURS=${SECOURS:-}"
       400|401|403) die "Clé refusée par Google (HTTP $CODE) $MESSAGE. Recopie-la en entier depuis https://aistudio.google.com/apikey (entre guillemets)" ;;
       404) die "Modèle $MODELE indisponible : $MESSAGE  → relance avec MODELE=<modèle conseillé> sh $0 \"LA_CLE\"" ;;
       429) die "Quota gratuit du modèle $MODELE épuisé pour aujourd'hui $MESSAGE. Essaie MODELE=gemini-3.5-flash-lite, ou réessaie demain." ;;
+      500|502|503|504) echo "  Google est surchargé en ce moment (HTTP $CODE) : la clé n'a pas pu être testée, on installe quand même."
+                       echo "  L'app réessaiera toute seule, et passera sur le modèle léger si besoin." ;;
       *) die "Google ne répond pas (HTTP $CODE) $MESSAGE" ;;
     esac
     LIGNES="GEMINI_API_KEY=$CLE

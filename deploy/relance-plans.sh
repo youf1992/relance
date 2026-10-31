@@ -69,6 +69,8 @@ OPENROUTER_SECOURS=${SECOURS:-}"
       400|401|403) die "Clé refusée par Google (HTTP $CODE) $MESSAGE. Recopie-la en entier depuis https://aistudio.google.com/apikey (entre guillemets)" ;;
       404) die "Modèle $MODELE indisponible : $MESSAGE  → relance avec MODELE=<modèle conseillé> sh $0 \"LA_CLE\"" ;;
       429) die "Quota gratuit du modèle $MODELE épuisé pour aujourd'hui $MESSAGE. Essaie MODELE=gemini-3.5-flash-lite, ou réessaie demain." ;;
+      500|502|503|504) echo "  Google est surchargé en ce moment (HTTP $CODE) : la clé n'a pas pu être testée, on installe quand même."
+                       echo "  L'app réessaiera toute seule, et passera sur le modèle léger si besoin." ;;
       *) die "Google ne répond pas (HTTP $CODE) $MESSAGE" ;;
     esac
     LIGNES="GEMINI_API_KEY=$CLE
@@ -119,6 +121,8 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 const CLE = Deno.env.get("GEMINI_API_KEY") ?? "";
 const MODELE = Deno.env.get("GEMINI_MODELE") ?? "gemini-3.8-flash";
+// Modèle de repli quand le principal est surchargé (503) ou à court de quota gratuit (429)
+const MODELE_LEGER = Deno.env.get("GEMINI_SECOURS") ?? "gemini-3.5-flash-lite";
 const API = Deno.env.get("GEMINI_URL") ?? "https://generativelanguage.googleapis.com";
 const CLE_OR = Deno.env.get("OPENROUTER_API_KEY") ?? "";
 const MODELE_OR = Deno.env.get("OPENROUTER_MODELE") ?? "openrouter/free";
@@ -259,8 +263,8 @@ function lireJson(texte: string): Record<string, unknown> {
   return { caissons, remarques: "Réponse de l'IA incomplète : vérifiez qu'il ne manque pas de pièces.", pieces, accessoires };
 }
 
-async function appelGemini(type: string, donnees: string, consigne: string): Promise<Reponse> {
-  const r = await fetch(`${API}/v1beta/models/${MODELE}:generateContent`, {
+async function appelGemini(type: string, donnees: string, consigne: string, modele = MODELE): Promise<Reponse> {
+  const r = await fetch(`${API}/v1beta/models/${modele}:generateContent`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": CLE },
     signal: AbortSignal.timeout(110_000),
@@ -271,8 +275,8 @@ async function appelGemini(type: string, donnees: string, consigne: string): Pro
     }),
   });
   if (!r.ok) {
-    console.error("gemini", r.status, (await r.text()).slice(0, 500));
-    return { ok: false, erreur: r.status === 429 ? "ia_occupee" : "ia_indisponible" };
+    console.error("gemini", modele, r.status, (await r.text()).slice(0, 500));
+    return { ok: false, erreur: r.status === 429 || r.status >= 500 ? "ia_occupee" : "ia_indisponible" };
   }
   const j = await r.json();
   return { ok: true, texte: j?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? "").join("") ?? "" };
@@ -368,7 +372,8 @@ Deno.serve(async (req) => {
     let resultat: ReturnType<typeof nettoyer> | null = null;
     let erreur = "ia_indisponible";
     const depart = Date.now();
-    const essais = CLE_OR ? 3 : 1;
+    // Gemini : 1er essai sur le modèle principal, puis on réessaie après une pause, puis modèle léger
+    const essais = 3;
     for (let i = 1; i <= essais && !resultat; i++) {
       const reste = 140_000 - (Date.now() - depart); // le serveur coupe vers 150 s
       if (reste < 20_000) break;
@@ -376,10 +381,11 @@ Deno.serve(async (req) => {
         const secours = CLE_OR && SECOURS_OR && i === essais;
         const r = CLE_OR
           ? await appelOpenRouter(type, donnees, consigne, Math.min(secours ? reste : 60_000, reste), secours ? SECOURS_OR : MODELE_OR)
-          : await appelGemini(type, donnees, consigne);
+          : await appelGemini(type, donnees, consigne, i === essais && MODELE_LEGER ? MODELE_LEGER : MODELE);
         if (!r.ok) {
           erreur = r.erreur;
           if (["ia_credit", "format"].includes(r.erreur)) break; // inutile de réessayer
+          if (!CLE_OR) await new Promise((ok) => setTimeout(ok, 4000)); // laisser passer le pic de demande
           continue;
         }
         resultat = nettoyer(lireJson(r.texte));
