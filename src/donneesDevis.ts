@@ -38,6 +38,7 @@ export interface DonneesDevis {
   articles: Article[];
   devis: Devis[];
   plansCeMois: number;
+  limitePlans: number;
   installe: boolean; // false si les tables ne sont pas encore créées sur le serveur
 }
 
@@ -54,7 +55,7 @@ export async function chargerDevis(uid: string): Promise<DonneesDevis> {
   if (reg.error) {
     // Tables absentes = module pas encore installé sur le VPS
     if (/does not exist|schema cache|Could not find/i.test(reg.error.message))
-      return { reglages: REGLAGES_PAR_DEFAUT, articles: [], devis: [], plansCeMois: 0, installe: false };
+      return { reglages: REGLAGES_PAR_DEFAUT, articles: [], devis: [], plansCeMois: 0, limitePlans: 0, installe: false };
     throw new Error(reg.error.message);
   }
   let reglages = reg.data as (Reglages & { entreprise_id: string }) | null;
@@ -72,10 +73,12 @@ export async function chargerDevis(uid: string): Promise<DonneesDevis> {
       entreprise_id: string;
     });
   }
-  const [art, dev, ia] = await Promise.all([
+  const [art, dev, ia, perso, defaut] = await Promise.all([
     supabase.from("devis_articles").select("*").order("categorie").order("nom"),
     supabase.from("devis").select("*").order("date", { ascending: false }).order("numero", { ascending: false }),
     supabase.from("ia_usage").select("plans").eq("mois", aujourdhui().slice(0, 7)).maybeSingle(),
+    supabase.from("ia_limites").select("plans_par_mois").eq("entreprise_id", uid).maybeSingle(),
+    supabase.from("parametres").select("plans_par_mois").maybeSingle(),
   ]);
   const r = reglages as unknown as Record<string, unknown>;
   const nombres = Object.fromEntries(
@@ -100,6 +103,11 @@ export async function chargerDevis(uid: string): Promise<DonneesDevis> {
       heures_reelles: numOuNull(d.heures_reelles),
     })),
     plansCeMois: (ia.data as { plans: number } | null)?.plans ?? 0,
+    // Tables absentes (installation pas à jour) : on affiche 200, la valeur par défaut
+    limitePlans:
+      (perso.data as { plans_par_mois: number } | null)?.plans_par_mois ??
+      (defaut.data as { plans_par_mois: number } | null)?.plans_par_mois ??
+      200,
     installe: true,
   };
 }

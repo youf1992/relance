@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
+import { Admin } from "./components/Admin";
 import { Aujourdhui } from "./components/Aujourdhui";
 import { Clients } from "./components/Clients";
 import { Connexion, NouveauMotDePasse } from "./components/Connexion";
@@ -17,7 +18,7 @@ import { piecesManquantes } from "./precompta";
 import { aRelancer } from "./relances";
 import { supabase } from "./supabase";
 
-type Onglet = "aujourdhui" | "devis" | "factures" | "clients" | "depenses" | "banque" | "modeles" | "entreprise";
+type Onglet = "aujourdhui" | "devis" | "factures" | "clients" | "depenses" | "banque" | "modeles" | "entreprise" | "admin";
 
 export default function App() {
   // undefined = on ne sait pas encore ; null = pas connecté
@@ -27,6 +28,7 @@ export default function App() {
   const [erreur, setErreur] = useState("");
   const [onglet, setOnglet] = useState<Onglet>("aujourdhui");
   const [depuisBanque, setDepuisBanque] = useState<DepenseDepuisBanque | null>(null);
+  const [estAdmin, setEstAdmin] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -55,6 +57,12 @@ export default function App() {
     if (!uid) return;
     recharger().then(() => {});
   }, [uid, recharger]);
+
+  // Onglet Admin : affiché seulement si la base confirme que ce compte est administrateur
+  useEffect(() => {
+    if (!uid) return;
+    supabase.rpc("suis_admin").then(({ data }) => setEstAdmin(data === true));
+  }, [uid]);
 
   // Premier passage : on commence par « Mon entreprise » si le nom n'est pas renseigné
   const nomManquant = !!donnees && !donnees.entreprise.nom.trim();
@@ -87,6 +95,7 @@ export default function App() {
     { id: "banque", titre: nbManquantes ? `Banque (${nbManquantes})` : "Banque" },
     { id: "modeles", titre: "Mails de relance" },
     { id: "entreprise", titre: "Mon entreprise" },
+    ...(estAdmin ? [{ id: "admin" as Onglet, titre: "Admin" }] : []),
   ];
 
   return (
@@ -152,6 +161,7 @@ export default function App() {
           />
         )}
         {onglet === "modeles" && <Modeles d={donnees} uid={uid!} recharger={recharger} />}
+        {onglet === "admin" && estAdmin && <Admin />}
         {onglet === "entreprise" && (
           <MonEntreprise
             d={donnees}

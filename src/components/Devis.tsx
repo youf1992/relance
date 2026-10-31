@@ -501,7 +501,7 @@ function Editeur(props: {
         </div>
       </Carte>
 
-      <LecturePlan appliquer={appliquerPlan} plansCeMois={dd.plansCeMois} />
+      <LecturePlan appliquer={appliquerPlan} plansCeMois={dd.plansCeMois} limite={dd.limitePlans} />
       {message && <p className="info">{message}</p>}
 
       <Carte titre="Pièces à découper" sousTitre="Dimensions finies en millimètres. Chants : côtés plaqués.">
@@ -650,16 +650,20 @@ function Editeur(props: {
   );
 }
 
-function LecturePlan(props: { appliquer: (p: PlanLu) => void; plansCeMois: number }) {
+function LecturePlan(props: { appliquer: (p: PlanLu) => void; plansCeMois: number; limite: number }) {
   const [precisions, setPrecisions] = useState("");
   const [etat, setEtat] = useState("");
   const [erreur, setErreur] = useState("");
+  const [lus, setLus] = useState<{ n: number; limite: number } | null>(null);
+  const compteur = lus ?? { n: props.plansCeMois, limite: props.limite };
 
   async function lire(f: File) {
     setErreur("");
     setEtat(`Lecture de « ${f.name.slice(0, 40)} »… (jusqu'à 2 min)`);
     try {
-      props.appliquer(await lirePlan(f, precisions));
+      const plan = await lirePlan(f, precisions);
+      setLus({ n: plan.utilises, limite: plan.limite });
+      props.appliquer(plan);
       setEtat("");
     } catch (e) {
       setEtat("");
@@ -684,7 +688,9 @@ function LecturePlan(props: { appliquer: (p: PlanLu) => void; plansCeMois: numbe
             }}
           />
         </label>
-        <span className="discret petit">{props.plansCeMois} plan(s) lu(s) ce mois-ci.</span>
+        <span className="discret petit">
+          {compteur.n} / {compteur.limite} plans lus ce mois-ci.
+        </span>
       </div>
       <Champ
         label="Précisions pour l'IA (facultatif)"

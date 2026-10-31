@@ -8,11 +8,10 @@
 #
 #   - range la clé dans le .env du Supabase podo (jamais dans l'app ni sur GitHub)
 #   - installe la fonction serveur « relance-lire-plan »
-#   - limite : PLANS_PAR_MOIS plans lus par entreprise et par mois (200 par défaut)
+#   - limite de plans lus par entreprise et par mois : se règle dans l'onglet Admin de l'app
 #
 # Usage, sur le VPS :  sh relance-plans.sh LA_CLE   (OpenRouter ou Gemini)
-# Options : PLANS_PAR_MOIS=300 sh relance-plans.sh LA_CLE   (changer la limite)
-#           MODELE=google/gemini-3.8-flash sh relance-plans.sh sk-or-...   (modèle payant précis via OpenRouter)
+# Options : MODELE=google/gemini-3.8-flash sh relance-plans.sh sk-or-...   (modèle payant précis via OpenRouter)
 #           SECOURS=google/gemini-3.8-flash sh relance-plans.sh sk-or-...   (gratuit d'abord, payant seulement si
 #                                                                          les gratuits échouent : ≈1 centime)
 #           MODELE=gemini-3.5-flash-lite sh relance-plans.sh AQ....          (plus de quota gratuit, moins précis)
@@ -105,7 +104,7 @@ else
   printf 'COMPOSE_FILE=docker-compose.yml:%s\n' "$FICHIER" >> .env
 fi
 docker compose config -q || { cp ".env.avant-plans.$STAMP" .env; rm -f "$FICHIER"; die "Configuration invalide, rien n'a changé."; }
-echo "  IA : $FOURNISSEUR ($MODELE). Limite : $LIMITE plans par entreprise et par mois."
+echo "  IA : $FOURNISSEUR ($MODELE). Limite de plans par client : onglet Admin de l'app."
 
 log "Fonction serveur relance-lire-plan"
 mkdir -p volumes/functions/relance-lire-plan

@@ -8,11 +8,10 @@
 #
 #   - range la clé dans le .env du Supabase podo (jamais dans l'app ni sur GitHub)
 #   - installe la fonction serveur « relance-lire-plan »
-#   - limite : PLANS_PAR_MOIS plans lus par entreprise et par mois (200 par défaut)
+#   - limite de plans lus par entreprise et par mois : se règle dans l'onglet Admin de l'app
 #
 # Usage, sur le VPS :  sh relance-plans.sh LA_CLE   (OpenRouter ou Gemini)
-# Options : PLANS_PAR_MOIS=300 sh relance-plans.sh LA_CLE   (changer la limite)
-#           MODELE=google/gemini-3.8-flash sh relance-plans.sh sk-or-...   (modèle payant précis via OpenRouter)
+# Options : MODELE=google/gemini-3.8-flash sh relance-plans.sh sk-or-...   (modèle payant précis via OpenRouter)
 #           SECOURS=google/gemini-3.8-flash sh relance-plans.sh sk-or-...   (gratuit d'abord, payant seulement si
 #                                                                          les gratuits échouent : ≈1 centime)
 #           MODELE=gemini-3.5-flash-lite sh relance-plans.sh AQ....          (plus de quota gratuit, moins précis)
@@ -105,7 +104,7 @@ else
   printf 'COMPOSE_FILE=docker-compose.yml:%s\n' "$FICHIER" >> .env
 fi
 docker compose config -q || { cp ".env.avant-plans.$STAMP" .env; rm -f "$FICHIER"; die "Configuration invalide, rien n'a changé."; }
-echo "  IA : $FOURNISSEUR ($MODELE). Limite : $LIMITE plans par entreprise et par mois."
+echo "  IA : $FOURNISSEUR ($MODELE). Limite de plans par client : onglet Admin de l'app."
 
 log "Fonction serveur relance-lire-plan"
 mkdir -p volumes/functions/relance-lire-plan
@@ -129,7 +128,8 @@ const MODELE_OR = Deno.env.get("OPENROUTER_MODELE") ?? "openrouter/free";
 // Facultatif : modèle (payant, fiable) utilisé au dernier essai si les gratuits ont échoué
 const SECOURS_OR = Deno.env.get("OPENROUTER_SECOURS") ?? "";
 const API_OR = Deno.env.get("OPENROUTER_URL") ?? "https://openrouter.ai/api";
-const LIMITE_MOIS = Number(Deno.env.get("PLANS_PAR_MOIS") ?? "200");
+// Limite de secours seulement : la vraie limite se règle dans l'onglet Admin de l'app (base de données)
+const LIMITE_SECOURS = Number(Deno.env.get("PLANS_PAR_MOIS") ?? "200");
 const MAX_OCTETS = 7 * 1024 * 1024;
 const TYPES = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
 
@@ -263,11 +263,11 @@ function lireJson(texte: string): Record<string, unknown> {
   return { caissons, remarques: "Réponse de l'IA incomplète : vérifiez qu'il ne manque pas de pièces.", pieces, accessoires };
 }
 
-async function appelGemini(type: string, donnees: string, consigne: string, modele = MODELE): Promise<Reponse> {
+async function appelGemini(type: string, donnees: string, consigne: string, modele: string, delai: number): Promise<Reponse> {
   const r = await fetch(`${API}/v1beta/models/${modele}:generateContent`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": CLE },
-    signal: AbortSignal.timeout(110_000),
+    signal: AbortSignal.timeout(delai),
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: CONSIGNES }] },
       contents: [{ role: "user", parts: [{ inlineData: { mimeType: type, data: donnees } }, { text: consigne }] }],
@@ -359,6 +359,9 @@ Deno.serve(async (req) => {
   const precisions = String(corps.precisions ?? "").slice(0, 500);
 
   // Compte la lecture AVANT l'appel (pas de dépassement si plusieurs envois en même temps)
+  // Limite de ce client (réglée par l'administrateur), sinon limite par défaut
+  const { data: limiteBase } = await admin.rpc("limite_plans", { p_entreprise: uid });
+  const LIMITE_MOIS = typeof limiteBase === "number" ? limiteBase : LIMITE_SECOURS;
   const { data: total, error: errCompte } = await admin.rpc("compter_plan", { p_entreprise: uid, p_limite: LIMITE_MOIS });
   if (errCompte) {
     console.error("compter_plan", errCompte);
@@ -381,7 +384,7 @@ Deno.serve(async (req) => {
         const secours = CLE_OR && SECOURS_OR && i === essais;
         const r = CLE_OR
           ? await appelOpenRouter(type, donnees, consigne, Math.min(secours ? reste : 60_000, reste), secours ? SECOURS_OR : MODELE_OR)
-          : await appelGemini(type, donnees, consigne, i === essais && MODELE_LEGER ? MODELE_LEGER : MODELE);
+          : await appelGemini(type, donnees, consigne, i === essais && MODELE_LEGER ? MODELE_LEGER : MODELE, Math.min(70_000, reste));
         if (!r.ok) {
           erreur = r.erreur;
           if (["ia_credit", "format"].includes(r.erreur)) break; // inutile de réessayer

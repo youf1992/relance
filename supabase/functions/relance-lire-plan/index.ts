@@ -17,7 +17,8 @@ const MODELE_OR = Deno.env.get("OPENROUTER_MODELE") ?? "openrouter/free";
 // Facultatif : modèle (payant, fiable) utilisé au dernier essai si les gratuits ont échoué
 const SECOURS_OR = Deno.env.get("OPENROUTER_SECOURS") ?? "";
 const API_OR = Deno.env.get("OPENROUTER_URL") ?? "https://openrouter.ai/api";
-const LIMITE_MOIS = Number(Deno.env.get("PLANS_PAR_MOIS") ?? "200");
+// Limite de secours seulement : la vraie limite se règle dans l'onglet Admin de l'app (base de données)
+const LIMITE_SECOURS = Number(Deno.env.get("PLANS_PAR_MOIS") ?? "200");
 const MAX_OCTETS = 7 * 1024 * 1024;
 const TYPES = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
 
@@ -247,6 +248,9 @@ Deno.serve(async (req) => {
   const precisions = String(corps.precisions ?? "").slice(0, 500);
 
   // Compte la lecture AVANT l'appel (pas de dépassement si plusieurs envois en même temps)
+  // Limite de ce client (réglée par l'administrateur), sinon limite par défaut
+  const { data: limiteBase } = await admin.rpc("limite_plans", { p_entreprise: uid });
+  const LIMITE_MOIS = typeof limiteBase === "number" ? limiteBase : LIMITE_SECOURS;
   const { data: total, error: errCompte } = await admin.rpc("compter_plan", { p_entreprise: uid, p_limite: LIMITE_MOIS });
   if (errCompte) {
     console.error("compter_plan", errCompte);
