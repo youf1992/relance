@@ -657,7 +657,7 @@ function LecturePlan(props: { appliquer: (p: PlanLu) => void; plansCeMois: numbe
 
   async function lire(f: File) {
     setErreur("");
-    setEtat(`Lecture de « ${f.name.slice(0, 40)} »… (jusqu'à 1 min)`);
+    setEtat(`Lecture de « ${f.name.slice(0, 40)} »… (jusqu'à 2 min)`);
     try {
       props.appliquer(await lirePlan(f, precisions));
       setEtat("");

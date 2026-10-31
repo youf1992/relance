@@ -215,17 +215,37 @@ function nettoyer(brut: Record<string, unknown>) {
 
 type Reponse = { ok: true; texte: string } | { ok: false; erreur: string };
 
-/** Le JSON de la réponse, même entouré de texte ou de ```json (fréquent avec les modèles gratuits). */
+/** Le JSON de la réponse, même entouré de texte, de ```json, ou coupé au milieu (fréquent avec les modèles gratuits). */
 function lireJson(texte: string): Record<string, unknown> {
   const t = texte.replace(/<think>[\s\S]*?<\/think>/g, "");
   try {
     return JSON.parse(t);
   } catch {
-    const debut = t.indexOf("{");
-    const fin = t.lastIndexOf("}");
-    if (debut < 0 || fin <= debut) throw new Error("pas de JSON");
-    return JSON.parse(t.slice(debut, fin + 1));
+    /* on essaie autrement */
   }
+  const debut = t.indexOf("{");
+  const fin = t.lastIndexOf("}");
+  if (debut >= 0 && fin > debut) {
+    try {
+      return JSON.parse(t.slice(debut, fin + 1));
+    } catch {
+      /* réponse coupée : on récupère ce qui est complet */
+    }
+  }
+  const pieces: unknown[] = [];
+  const accessoires: unknown[] = [];
+  for (const m of t.matchAll(/\{[^{}]*\}/g)) {
+    try {
+      const o = JSON.parse(m[0]);
+      if ("longueur" in o && "largeur" in o) pieces.push(o);
+      else if ("nom" in o && "quantite" in o) accessoires.push(o);
+    } catch {
+      /* morceau illisible */
+    }
+  }
+  if (!pieces.length && !accessoires.length) throw new Error("pas de JSON : " + t.slice(0, 300));
+  const caissons = Number(/"caissons"\s*:\s*(\d+)/.exec(t)?.[1] ?? 0);
+  return { caissons, remarques: "Réponse de l'IA incomplète : vérifiez qu'il ne manque pas de pièces.", pieces, accessoires };
 }
 
 async function appelGemini(type: string, donnees: string, consigne: string): Promise<Reponse> {
@@ -253,7 +273,7 @@ const FORMAT_JSON = `Réponds UNIQUEMENT avec un objet JSON, sans texte autour, 
 "quantite": 2, "chants_longueur": 1, "chants_largeur": 0}], "accessoires": [{"nom": "Charnière", "quantite": 4}]}
 Dimensions en millimètres, nombres sans unité.`;
 
-async function appelOpenRouter(type: string, donnees: string, consigne: string): Promise<Reponse> {
+async function appelOpenRouter(type: string, donnees: string, consigne: string, delai: number): Promise<Reponse> {
   if (type === "application/pdf") return { ok: false, erreur: "format" }; // le navigateur envoie une image
   const r = await fetch(`${API_OR}/v1/chat/completions`, {
     method: "POST",
@@ -262,10 +282,11 @@ async function appelOpenRouter(type: string, donnees: string, consigne: string):
       Authorization: `Bearer ${CLE_OR}`,
       "X-Title": "Relance",
     },
-    signal: AbortSignal.timeout(110_000),
+    signal: AbortSignal.timeout(delai),
     body: JSON.stringify({
       model: MODELE_OR,
       temperature: 0,
+      max_tokens: 6000,
       messages: [
         { role: "system", content: `${CONSIGNES}\n\n${FORMAT_JSON}` },
         {
@@ -329,12 +350,31 @@ Deno.serve(async (req) => {
   const rendre = () => admin.rpc("rendre_plan", { p_entreprise: uid }).then(() => {});
   try {
     const consigne = precisions ? `Précisions de l'artisan : ${precisions}` : "Établis la liste de débit de ce plan.";
-    const r = CLE_OR ? await appelOpenRouter(type, donnees, consigne) : await appelGemini(type, donnees, consigne);
-    if (!r.ok) {
-      await rendre();
-      return repondre({ erreur: r.erreur }, 503);
+    let resultat: ReturnType<typeof nettoyer> | null = null;
+    let erreur = "ia_indisponible";
+    const depart = Date.now();
+    const essais = CLE_OR ? 3 : 1;
+    for (let i = 1; i <= essais && !resultat; i++) {
+      const reste = 140_000 - (Date.now() - depart); // le serveur coupe vers 150 s
+      if (reste < 20_000) break;
+      try {
+        const r = CLE_OR
+          ? await appelOpenRouter(type, donnees, consigne, Math.min(70_000, reste))
+          : await appelGemini(type, donnees, consigne);
+        if (!r.ok) {
+          erreur = r.erreur;
+          if (["ia_credit", "format"].includes(r.erreur)) break; // inutile de réessayer
+          continue;
+        }
+        resultat = nettoyer(lireJson(r.texte));
+      } catch (e) {
+        console.error(`relance-lire-plan essai ${i}`, e instanceof Error ? e.message : e);
+      }
     }
-    const resultat = nettoyer(lireJson(r.texte));
+    if (!resultat) {
+      await rendre();
+      return repondre({ erreur }, 503);
+    }
     // Rien trouvé (pas un plan, plan illisible) : la lecture ne compte pas dans la limite du mois
     if (!resultat.pieces.length && !resultat.accessoires.length) {
       await rendre();
