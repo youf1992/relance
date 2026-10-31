@@ -4,7 +4,7 @@
 # Deux fournisseurs possibles, selon la clé donnée :
 #   - OpenRouter (clé sk-or-...) : modèles GRATUITS par défaut (openrouter/free),
 #     limités à 50 plans par jour sans crédit acheté, 1000 par jour avec 10 $ de crédit
-#   - Google Gemini (clé AIza...)
+#   - Google Gemini (clé AQ.... ou AIza...)
 #
 #   - range la clé dans le .env du Supabase podo (jamais dans l'app ni sur GitHub)
 #   - installe la fonction serveur « relance-lire-plan »
@@ -55,7 +55,7 @@ OPENROUTER_MODELE=$MODELE
 OPENROUTER_SECOURS=${SECOURS:-}"
     [ -n "${SECOURS:-}" ] && echo "  Secours si les gratuits échouent : $SECOURS"
     ;;
-  AIza*)
+  AIza*|AQ.*)
     FOURNISSEUR=Gemini
     MODELE="${MODELE:-${GEMINI_MODELE:-gemini-2.5-flash}}"
     log "Test de la clé Gemini"
@@ -63,14 +63,14 @@ OPENROUTER_SECOURS=${SECOURS:-}"
       "https://generativelanguage.googleapis.com/v1beta/models/$MODELE" || true)
     case "$CODE" in
       200) echo "  Clé valide, modèle $MODELE disponible." ;;
-      400|403) die "Clé refusée par Google (HTTP $CODE). Vérifie-la sur https://aistudio.google.com/apikey" ;;
+      400|401|403) die "Clé refusée par Google (HTTP $CODE). Recopie-la en entier depuis https://aistudio.google.com/apikey (entre guillemets)" ;;
       404) die "Modèle $MODELE introuvable. Essaie MODELE=gemini-2.5-flash" ;;
       *) die "Google ne répond pas (HTTP $CODE). Vérifie la connexion du VPS." ;;
     esac
     LIGNES="GEMINI_API_KEY=$CLE
 GEMINI_MODELE=$MODELE"
     ;;
-  *) die "Donne une clé OpenRouter (sk-or-...) ou Gemini (AIza...) : sh $0 LA_CLE" ;;
+  *) die "Donne une clé OpenRouter (sk-or-...) ou Gemini (AQ.... ou AIza...) : sh $0 LA_CLE" ;;
 esac
 
 log "Réglages"
