@@ -9,6 +9,7 @@ import { Modeles } from "./components/Modeles";
 import { Banque } from "./components/Banque";
 import { Chargement } from "./components/Chargement";
 import { Depenses, type DepenseDepuisBanque } from "./components/Depenses";
+import { Devis } from "./components/Devis";
 import { BoutonTheme } from "./components/Theme";
 import { charger, type Donnees } from "./donnees";
 import { NOM_APP } from "./marque";
@@ -16,7 +17,7 @@ import { piecesManquantes } from "./precompta";
 import { aRelancer } from "./relances";
 import { supabase } from "./supabase";
 
-type Onglet = "aujourdhui" | "factures" | "clients" | "depenses" | "banque" | "modeles" | "entreprise";
+type Onglet = "aujourdhui" | "devis" | "factures" | "clients" | "depenses" | "banque" | "modeles" | "entreprise";
 
 export default function App() {
   // undefined = on ne sait pas encore ; null = pas connecté
@@ -79,6 +80,7 @@ export default function App() {
   const nbAujourdhui = aRelancer(donnees.factures, donnees.clients, donnees.etapes, donnees.relances).length;
   const onglets: { id: Onglet; titre: string }[] = [
     { id: "aujourdhui", titre: nbAujourdhui ? `Aujourd'hui (${nbAujourdhui})` : "Aujourd'hui" },
+    { id: "devis", titre: "Devis" },
     { id: "factures", titre: "Factures" },
     { id: "clients", titre: "Clients" },
     { id: "depenses", titre: "Dépenses" },
@@ -124,6 +126,7 @@ export default function App() {
 
       <main className="contenu">
         {onglet === "aujourdhui" && <Aujourdhui d={donnees} recharger={recharger} aller={setOnglet} />}
+        {onglet === "devis" && <Devis d={donnees} uid={uid!} recharger={recharger} />}
         {onglet === "factures" && <Factures d={donnees} recharger={recharger} />}
         {onglet === "clients" && <Clients d={donnees} recharger={recharger} />}
         {onglet === "depenses" && (

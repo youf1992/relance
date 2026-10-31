@@ -2,6 +2,7 @@
 """Génère les scripts du VPS à partir des modèles :
 - deploy/relance-installer.sh (le SQL des migrations y est copié)
 - deploy/relance-ia.sh        (la fonction serveur relance-lire-facture y est copiée)
+- deploy/relance-plans.sh     (la fonction serveur relance-lire-plan y est copiée)
 """
 import glob
 import os
@@ -18,3 +19,8 @@ code = lire("..", "supabase", "functions", "relance-lire-facture", "index.ts").r
 assert "\nRELANCE_TS\n" not in code
 open(os.path.join(ici, "relance-ia.sh"), "w").write(lire("relance-ia.template.sh").replace("__FONCTION__", code))
 print("deploy/relance-ia.sh généré")
+
+code = lire("..", "supabase", "functions", "relance-lire-plan", "index.ts").rstrip()
+assert "\nRELANCE_TS\n" not in code
+open(os.path.join(ici, "relance-plans.sh"), "w").write(lire("relance-plans.template.sh").replace("__FONCTION__", code))
+print("deploy/relance-plans.sh généré")
