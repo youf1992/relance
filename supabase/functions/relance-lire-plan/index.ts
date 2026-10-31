@@ -234,6 +234,11 @@ Deno.serve(async (req) => {
       return repondre({ erreur: r.erreur }, 503);
     }
     const resultat = nettoyer(lireJson(r.texte));
+    // Rien trouvé (pas un plan, plan illisible) : la lecture ne compte pas dans la limite du mois
+    if (!resultat.pieces.length && !resultat.accessoires.length) {
+      await rendre();
+      return repondre({ ...resultat, utilises: total - 1, limite: LIMITE_MOIS });
+    }
     return repondre({ ...resultat, utilises: total, limite: LIMITE_MOIS });
   } catch (e) {
     await rendre();

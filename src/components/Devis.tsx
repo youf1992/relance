@@ -374,6 +374,13 @@ function Editeur(props: {
       const a = articleProche(x.nom, autres);
       return { id: nouvelId(), article_id: a?.id ?? null, libelle: a ? "" : x.nom, quantite: x.quantite, prix_ht: 0 };
     });
+    if (!lues.length && !acc.length) {
+      setMessage(
+        "Aucune pièce trouvée sur ce document : envoyez un plan avec les cotes (vue de face, coupe ou plan de débit)." +
+          (p.remarques ? ` L'IA explique : ${p.remarques}` : ""),
+      );
+      return;
+    }
     const sansPrix = acc.filter((f) => !f.article_id).length;
     setPieces((ps) => [...ps.filter((x) => x.longueur || x.largeur || x.nom), ...lues]);
     setFournitures((fs) => [...fs, ...acc]);
